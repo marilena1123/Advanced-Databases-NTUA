@@ -52,6 +52,9 @@ joined_df_shuffle_replicate_nl = firearm_crimes.hint("shuffle_replicate_nl").joi
 joined_df_shuffle_replicate_nl = joined_df_shuffle_replicate_nl.withColumn("Distance", get_distance_udf(col("LAT"), col("LON"), col("Station_LAT"), col("Station_LON")))
 joined_df_shuffle_replicate_nl.explain()
 
+
+crimes_and_precincts_df=firearm_crimes.crossJoin(stations_df).withColumn("Distance", get_distance_udf(col("LAT"), col("LON"), col("Station_LAT"), col("Station_LON")))
+
 # DataFrame API Analysis
 yearly_stats_df = joined_df_broadcast.groupBy("Year").agg(
     avg("Distance").alias("Average Distance"),
@@ -65,6 +68,7 @@ dept_stats_df = joined_df_broadcast.groupBy("DIVISION").agg(
 
 # SQL API Analysis
 joined_df_broadcast.createOrReplaceTempView("firearm_crimes_view")
+crimes_and_precincts_df.createOrReplaceTempView("closer_view")
 
 yearly_stats_sql = spark.sql("""
     SELECT Year , AVG(Distance) AS `Average Distance`, COUNT(DR_NO) AS `Number of Crimes`
@@ -80,17 +84,48 @@ dept_stats_sql = spark.sql("""
     ORDER BY `Number of Crimes` DESC
 """)
 
+yearly_stats_closer_sql = spark.sql("""
+        SELECT Year, AVG(Distance) AS `Average Distance`, COUNT(DISTINCT DR_NO) AS `Number of Crimes`
+        FROM (
+        SELECT DR_NO , Year, MIN(Distance) AS `Distance`
+        FROM closer_view
+        GROUP BY DR_NO,Year
+        )
+        GROUP BY Year
+        ORDER BY Year
+""")
+
+dept_stats_closer_sql = spark.sql("""
+    SELECT DIVISION AS `DIVISION`, AVG(Distancea1) AS `Average Distance`, COUNT(DR_NOa1) AS `Number of Crimes`
+    FROM (
+        SELECT a1.DIVISION AS DIVISION, a1.Distance AS Distancea1 , a2.Distance, a1.DR_NO AS DR_NOa1, a2.DR_NO FROM
+        (SELECT DR_NO , MIN(Distance) AS `Distance`
+        FROM closer_view 
+        GROUP BY DR_NO) AS `a2`
+        INNER JOIN closer_view AS `a1` 
+        WHERE (a1.DR_NO=a2.DR_NO AND a1.Distance=a2.Distance)
+        )
+    GROUP BY DIVISION
+    ORDER BY `Number of Crimes` DESC
+""")
+
 print("DataFrame API - Year-wise Analysis:")
 yearly_stats_df.show()
 
 print("DataFrame API - Police Department-wise Analysis:")
-dept_stats_df.show()
+dept_stats_df.show(n=21, truncate=False)
 
 print("SQL API - Year-wise Analysis:")
 yearly_stats_sql.show()
 
 print("SQL API - Police Department-wise Analysis:")
-dept_stats_sql.show()
+dept_stats_sql.show(n=21, truncate=False)
+
+print("SQL API - Year-wise Closer Distance Analysis:")
+yearly_stats_closer_sql.show()
+
+print("SQL API - Police Department-wise Closer Distance Analysis:")
+dept_stats_closer_sql.show(n=21, truncate=False)
 
 spark.stop()
 
